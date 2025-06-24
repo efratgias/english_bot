@@ -1,39 +1,35 @@
 import os
 import logging
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import Update, InputFile
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import speech_recognition as sr
-from pydub import AudioSegment
+import tempfile
+import requests
+import difflib
 
-# הגדר לוגים
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# הגדרת משפטים לתרגול
+PRACTICE_SENTENCES = [
+    "She sells seashells by the seashore.",
+    "The quick brown fox jumps over the lazy dog.",
+    "I think I can, I think I can, I think I can.",
+    "Peter Piper picked a peck of pickled peppers.",
+]
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+# זיהוי קולי
+recognizer = sr.Recognizer()
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("Hi! Send me a voice message in English and I will correct your mistakes.")
+# התחלה
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sentence = PRACTICE_SENTENCES[0]
+    context.user_data["sentence_index"] = 0
+    await update.message.reply_text(f"Repeat this sentence:\n\n{sentence}")
+    await update.message.reply_text("Now send me your voice saying the same sentence!")
 
-def handle_voice(update: Update, context: CallbackContext):
-    file = update.message.voice.get_file()
-    file_path = "voice.ogg"
-    wav_path = "voice.wav"
-    file.download(file_path)
+# קליטת הודעה קולית
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if "sentence_index" not in context.user_data:
+        await update.message.reply_text("Please start with /start")
+        return
 
-    # המרה ל־WAV
-    sound = AudioSegment.from_file(file_path)
-    sound.export(wav_path, format="wav")
-
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_path) as source:
-        audio_data = recognizer.record(source)
-        try:
-            text = recognizer.recognize_google(audio_data)
-            update.message.reply_text(f"You said: {text}")
-            # כאן אפשר להוסיף בדיקת שגיאות ודקדוק
-        except sr.UnknownValueError:
-            update.message.reply_text("Sorry, I couldn't understand what you said.")
-        except sr.RequestError as e:
-            update.message.reply_text(f"Speech recognition error: {e}")
-
-def main():
-    updater = Up
+    voice = update.message.voice
+    file = await context.bot.get_file(voice.file_id)
