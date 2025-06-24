@@ -1,8 +1,7 @@
 import os
-import logging
-import random
 import tempfile
-import difflib
+import random
+import logging
 import speech_recognition as sr
 from gtts import gTTS
 
@@ -12,37 +11,36 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 TOKEN = os.getenv("BOT_TOKEN")
 
 logging.basicConfig(
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-# משפטים לתרגול
-PRACTICE_SENTENCES = [
+sentences = [
     "She sells seashells by the seashore.",
+    "I thought I saw a pussycat.",
+    "How much wood would a woodchuck chuck?",
     "The quick brown fox jumps over the lazy dog.",
-    "How much wood would a woodchuck chuck if a woodchuck could chuck wood?"
+    "Peter Piper picked a peck of pickled peppers."
 ]
 
-# משתנה לשמירת המשפט שנשלח
-last_sentence = ""
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_sentence
-    last_sentence = random.choice(PRACTICE_SENTENCES)
-    await update.message.reply_text("Repeat this sentence:")
-    await update.message.reply_text(last_sentence)
+    sentence = random.choice(sentences)
+    context.user_data["current_sentence"] = sentence
 
-    tts = gTTS(text=last_sentence, lang='en')
-    tts_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tts.save(tts_fp.name)
+    # שליחת הטקסט
+    await update.message.reply_text(f"Repeat this sentence:\n\n{sentence}")
 
-    with open(tts_fp.name, 'rb') as audio_file:
-        await update.message.reply_voice(voice=InputFile(audio_file))
+    # יצירת קול
+    tts = gTTS(sentence)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+        tts.save(f.name)
+        with open(f.name, "rb") as audio_file:
+            await update.message.reply_voice(voice=InputFile(audio_file))
 
+    # בקשה מהמשתמש להקליט
     await update.message.reply_text("Now send me your voice saying the same sentence!")
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_sentence
     try:
         file = await context.bot.get_file(update.message.voice.file_id)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as tf:
@@ -52,27 +50,24 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with sr.AudioFile(tf.name) as source:
                 audio = recognizer.record(source)
 
-            try:
-                text = recognizer.recognize_google(audio)
-                await update.message.reply_text(f"You said: {text}")
+            user_text = recognizer.recognize_google(audio)
+            await update.message.reply_text(f"You said: {user_text}")
 
-                # חישוב דיוק ההגייה
-                similarity = difflib.SequenceMatcher(None, last_sentence.lower(), text.lower()).ratio()
-                score = round(similarity * 100)
+            expected = context.user_data.get("current_sentence", "")
+            expected_words = expected.lower().split()
+            user_words = user_text.lower().split()
+            matches = sum(1 for w1, w2 in zip(expected_words, user_words) if w1 == w2)
+            accuracy = round((matches / len(expected_words)) * 100) if expected_words else 0
 
-                await update.message.reply_text(f"Your pronunciation score: {score}%")
-
-            except sr.UnknownValueError:
-                await update.message.reply_text("Sorry, I couldn't understand your pronunciation.")
+            await update.message.reply_text(f"Pronunciation Accuracy: {accuracy}%")
+            await update.message.reply_text("Want to try again? Type /start")
 
     except Exception as e:
-        logging.error(f"Error: {e}")
-        await update.message.reply_text("An error occurred while processing your voice message.")
+        logging.error(e)
+        await update.message.reply_text("Sorry, I couldn't understand. Please try again.")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
-
     app.run_polling()
