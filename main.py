@@ -1,35 +1,37 @@
-import os
-import logging
-from telegram import Update, InputFile
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import speech_recognition as sr
-import tempfile
-import requests
-import difflib
+import os
 
-# הגדרת משפטים לתרגול
-PRACTICE_SENTENCES = [
-    "She sells seashells by the seashore.",
-    "The quick brown fox jumps over the lazy dog.",
-    "I think I can, I think I can, I think I can.",
-    "Peter Piper picked a peck of pickled peppers.",
-]
+TOKEN = os.getenv("BOT_TOKEN")  # חשוב לוודא שהוספת את זה ב-secrets בריילווי בשם BOT_TOKEN
 
-# זיהוי קולי
-recognizer = sr.Recognizer()
-
-# התחלה
+# הפקודה /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sentence = PRACTICE_SENTENCES[0]
-    context.user_data["sentence_index"] = 0
-    await update.message.reply_text(f"Repeat this sentence:\n\n{sentence}")
-    await update.message.reply_text("Now send me your voice saying the same sentence!")
+    await update.message.reply_text("Repeat this sentence:\nShe sells seashells by the seashore.\n\nNow send me your voice saying the same sentence!")
 
-# קליטת הודעה קולית
+# קבלת הודעות קוליות
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "sentence_index" not in context.user_data:
-        await update.message.reply_text("Please start with /start")
-        return
+    file = await context.bot.get_file(update.message.voice.file_id)
+    await file.download_to_drive("voice.ogg")
 
-    voice = update.message.voice
-    file = await context.bot.get_file(voice.file_id)
+    recognizer = sr.Recognizer()
+    with sr.AudioFile("voice.ogg") as source:
+        audio = recognizer.record(source)
+
+    try:
+        text = recognizer.recognize_google(audio)
+        if text.lower().strip() == "she sells seashells by the seashore":
+            await update.message.reply_text("✅ Great job! You said it correctly.")
+        else:
+            await update.message.reply_text(f"❌ You said: \"{text}\"\nTry again!")
+    except Exception as e:
+        await update.message.reply_text("Sorry, I couldn't understand you.")
+
+# הרצת הבוט
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+    app.run_polling()
