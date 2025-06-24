@@ -1,64 +1,75 @@
 import os
+import random
 import tempfile
-import logging
+import difflib
 import speech_recognition as sr
+from gtts import gTTS
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-from telegram import Update, Voice
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+# משפטים לשיפור האנגלית
+SENTENCES = [
+    "I have never been to New York.",
+    "She enjoys learning English every day.",
+    "Can you repeat that, please?",
+    "Practice makes perfect.",
+    "It’s never too late to start."
+]
 
-# קונפיגורציית לוגים
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+user_sentences = {}
 
-TOKEN = os.getenv("BOT_TOKEN")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sentence = random.choice(SENTENCES)
+    user_id = update.effective_user.id
+    user_sentences[user_id] = sentence
 
+    await update.message.reply_text(f"🗣 Repeat this sentence:\n\n\"{sentence}\"")
 
-# פונקציה שממירה הודעת קול לטקסט
+    tts = gTTS(sentence)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+        tts.save(f.name)
+        await update.message.reply_voice(voice=open(f.name, "rb"))
+        os.remove(f.name)
+
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.voice:
-        await update.message.reply_text("לא הצלחתי להבין את ההודעה.")
+    user_id = update.effective_user.id
+    if user_id not in user_sentences:
+        await update.message.reply_text("Please start with /start to get a sentence.")
         return
 
-    voice: Voice = update.message.voice
-    file = await context.bot.get_file(voice.file_id)
+    sentence = user_sentences[user_id]
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as tmp_file:
-        await file.download_to_drive(custom_path=tmp_file.name)
-        tmp_path = tmp_file.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as voice_file:
+        file = await context.bot.get_file(update.message.voice.file_id)
+        await file.download_to_drive(voice_file.name)
 
-    # ממיר את הקובץ לטקסט באנגלית
+    audio_path = voice_file.name
+    wav_path = audio_path.replace(".ogg", ".wav")
+
+    os.system(f"ffmpeg -i {audio_path} {wav_path} -y")
     recognizer = sr.Recognizer()
-    with sr.AudioFile(tmp_path) as source:
-        audio_data = recognizer.record(source)
+    with sr.AudioFile(wav_path) as source:
+        audio = recognizer.record(source)
 
-        try:
-            text = recognizer.recognize_google(audio_data, language="en-US")
-            await update.message.reply_text(f"You said: {text}")
-            # כאן אפשר להוסיף לוגיקת תיקון שגיאות בעתיד
-        except sr.UnknownValueError:
-            await update.message.reply_text("I couldn't understand what you said.")
-        except sr.RequestError as e:
-            await update.message.reply_text(f"Speech recognition error: {e}")
+    try:
+        result = recognizer.recognize_google(audio)
+        ratio = difflib.SequenceMatcher(None, sentence.lower(), result.lower()).ratio()
+        accuracy = round(ratio * 100)
+        await update.message.reply_text(f"✅ Accuracy: {accuracy}%\nYou said: \"{result}\"")
+    except sr.UnknownValueError:
+        await update.message.reply_text("Sorry, I couldn't understand your pronunciation.")
+    except sr.RequestError:
+        await update.message.reply_text("There was an error with the speech recognition service.")
 
-    os.remove(tmp_path)
-
-
-# פונקציית הפעלה
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-
-    print("Bot is running...")
-    app.run_polling()
-
+    os.remove(audio_path)
+    if os.path.exists(wav_path):
+        os.remove(wav_path)
 
 if __name__ == "__main__":
-    main()
+    TOKEN = os.getenv("BOT_TOKEN")
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+    app.run_polling()
