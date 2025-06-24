@@ -2,86 +2,77 @@ import os
 import logging
 import random
 import tempfile
+import difflib
 import speech_recognition as sr
 from gtts import gTTS
 
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
+from telegram import Update, InputFile
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("BOT_TOKEN")
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# רשימת משפטים לתרגול
+# משפטים לתרגול
 PRACTICE_SENTENCES = [
-    "The quick brown fox jumps over the lazy dog.",
     "She sells seashells by the seashore.",
-    "How are you doing today?",
-    "English is fun to learn.",
-    "Can you repeat after me?"
+    "The quick brown fox jumps over the lazy dog.",
+    "How much wood would a woodchuck chuck if a woodchuck could chuck wood?"
 ]
 
-# פונקציית התחלה
+# משתנה לשמירת המשפט שנשלח
+last_sentence = ""
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sentence = random.choice(PRACTICE_SENTENCES)
-    context.user_data["current_sentence"] = sentence
+    global last_sentence
+    last_sentence = random.choice(PRACTICE_SENTENCES)
+    await update.message.reply_text("Repeat this sentence:")
+    await update.message.reply_text(last_sentence)
 
-    # שליחת המשפט בטקסט
-    await update.message.reply_text(f"Repeat this sentence:\n\n{sentence}")
+    tts = gTTS(text=last_sentence, lang='en')
+    tts_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tts.save(tts_fp.name)
 
-    # הפקת קול מהמשפט
-    tts = gTTS(text=sentence, lang='en')
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-        tts.save(f.name)
-        with open(f.name, "rb") as audio_file:
-            await update.message.reply_voice(voice=audio_file)
+    with open(tts_fp.name, 'rb') as audio_file:
+        await update.message.reply_voice(voice=InputFile(audio_file))
 
     await update.message.reply_text("Now send me your voice saying the same sentence!")
 
-# קליטת הודעת קול והשוואת ההגייה
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global last_sentence
     try:
-        # הורדת ההודעה הקולית
         file = await context.bot.get_file(update.message.voice.file_id)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as tf:
             await file.download_to_drive(tf.name)
 
-            # זיהוי דיבור
             recognizer = sr.Recognizer()
             with sr.AudioFile(tf.name) as source:
                 audio = recognizer.record(source)
-                try:
-                    user_text = recognizer.recognize_google(audio)
-                    original = context.user_data.get("current_sentence", "").lower()
-                    spoken = user_text.lower()
 
-                    # חישוב אחוז התאמה פשוט (על סמך התאמת מילים)
-                    original_words = set(original.split())
-                    spoken_words = set(spoken.split())
-                    match = len(original_words & spoken_words)
-                    total = len(original_words)
-                    score = int((match / total) * 100) if total > 0 else 0
+            try:
+                text = recognizer.recognize_google(audio)
+                await update.message.reply_text(f"You said: {text}")
 
-                    await update.message.reply_text(
-                        f"You said: {user_text}\nAccuracy: {score}%"
-                    )
-                except sr.UnknownValueError:
-                    await update.message.reply_text("Sorry, I couldn't understand what you said.")
+                # חישוב דיוק ההגייה
+                similarity = difflib.SequenceMatcher(None, last_sentence.lower(), text.lower()).ratio()
+                score = round(similarity * 100)
+
+                await update.message.reply_text(f"Your pronunciation score: {score}%")
+
+            except sr.UnknownValueError:
+                await update.message.reply_text("Sorry, I couldn't understand your pronunciation.")
+
     except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+        logging.error(f"Error: {e}")
+        await update.message.reply_text("An error occurred while processing your voice message.")
 
-# בניית האפליקציה והפעלתה
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.VOICE, voice_handler))
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app.run_polling()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.VOICE, voice_handler))
+
+    app.run_polling()
