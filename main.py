@@ -1,84 +1,81 @@
 import os
-import random
-import tempfile
-import difflib
-import speech_recognition as sr
-from gtts import gTTS
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
+import torch
+import whisper
+from gtts import gTTS
+from pydub import AudioSegment
+import uuid
 
-# משפטים לשיפור ההגייה
-SENTENCES = [
-    "I have never been to New York.",
-    "She enjoys learning English every day.",
-    "Can you repeat that, please?",
-    "Practice makes perfect.",
-    "It’s never too late to start."
+# טען את מודל whisper
+model = whisper.load_model("base")
+
+# משפט לדוגמה לתרגול
+practice_sentences = [
+    "The quick brown fox jumps over the lazy dog",
+    "She sells seashells by the seashore",
+    "Practice makes perfect",
+    "How are you doing today?",
+    "This is a test sentence"
 ]
-
-user_sentences = {}
+user_sessions = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sentence = random.choice(SENTENCES)
     user_id = update.effective_user.id
-    user_sentences[user_id] = sentence
+    sentence = practice_sentences[torch.randint(0, len(practice_sentences), (1,)).item()]
+    user_sessions[user_id] = sentence
 
-    await update.message.reply_text(f"🗣 Repeat this sentence:\n\n\"{sentence}\"")
+    # שליחת טקסט
+    await update.message.reply_text(f"Repeat this sentence:\n\n📢 {sentence}")
 
-    # צור קובץ קול מהמשפט ושלח למשתמש
+    # יצירת קול ושליחה
     tts = gTTS(sentence)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-        tts.save(f.name)
-        await update.message.reply_voice(voice=open(f.name, "rb"))
-    os.remove(f.name)
+    filename = f"{uuid.uuid4()}.mp3"
+    tts.save(filename)
+    await update.message.reply_voice(voice=open(filename, "rb"))
+    os.remove(filename)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in user_sentences:
-        await update.message.reply_text("Please start first by sending /start")
+    if user_id not in user_sessions:
+        await update.message.reply_text("Please start with /start to get a sentence to repeat.")
         return
 
-    # הורד את הודעת הקול הזמנית
-    voice = await update.message.voice.get_file()
-    ogg_path = f"{user_id}.ogg"
-    wav_path = f"{user_id}.wav"
-    await voice.download_to_drive(ogg_path)
+    sentence = user_sessions[user_id]
 
-    # המר ל-wav (רנדר תומך בזה ב-Ffmpeg מותקן)
-    os.system(f"ffmpeg -i {ogg_path} -ar 16000 -ac 1 {wav_path}")
+    # הורדת ההודעה הקולית
+    file = await context.bot.get_file(update.message.voice.file_id)
+    file_path = f"{uuid.uuid4()}.ogg"
+    await file.download_to_drive(file_path)
+
+    # המרה ל־wav
+    audio = AudioSegment.from_file(file_path)
+    wav_path = f"{uuid.uuid4()}.wav"
+    audio.export(wav_path, format="wav")
+    os.remove(file_path)
 
     # זיהוי דיבור
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_path) as source:
-        audio = recognizer.record(source)
-
-    try:
-        recognized_text = recognizer.recognize_google(audio)
-    except sr.UnknownValueError:
-        recognized_text = ""
-
-    # ניקוי קבצים זמניים
-    os.remove(ogg_path)
+    result = model.transcribe(wav_path)
+    spoken_text = result["text"]
     os.remove(wav_path)
 
-    # השוואה בין המשפט שנשלח למה שהמשתמש אמר
-    expected = user_sentences[user_id]
-    seq = difflib.SequenceMatcher(None, expected.lower(), recognized_text.lower())
-    score = round(seq.ratio() * 100)
+    # חישוב דיוק
+    original_words = sentence.lower().split()
+    spoken_words = spoken_text.lower().split()
+    match = sum(1 for a, b in zip(original_words, spoken_words) if a == b)
+    score = int((match / len(original_words)) * 100)
 
-    await update.message.reply_text(
-        f"✅ You said: \"{recognized_text}\"\n🎯 Target: \"{expected}\"\n📊 Accuracy: {score}%"
-    )
+    await update.message.reply_text(f"🗣 You said: {spoken_text}\n✅ Pronunciation Score: {score}%\n\nType /start to try another!")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import asyncio
+    from telegram.ext import Application
 
     TOKEN = os.getenv("BOT_TOKEN")
 
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
     print("Bot is running...")
-    asyncio.run(app.run_polling())
+    app.run_polling()
