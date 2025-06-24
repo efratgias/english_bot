@@ -1,65 +1,89 @@
 import os
 import logging
-from telegram import Update
+import random
+import difflib
+import tempfile
+
+from telegram import Update, Voice
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
 import torch
 import whisper
 from gtts import gTTS
 from pydub import AudioSegment
-import difflib
 
-# הגדרת מודל whisper
+# הגדרת רשימת משפטים
+sentences = [
+    "The quick brown fox jumps over the lazy dog",
+    "Practice makes perfect",
+    "She sells seashells by the seashore",
+    "Better late than never",
+    "A journey of a thousand miles begins with a single step"
+]
+
+# אתחול מודל ההמרה מדיבור לטקסט
 model = whisper.load_model("base")
 
-# אחסון המשפט הנוכחי
+# הפעלת לוגים
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+
+# משתנה גלובלי לשמירת המשפט הנוכחי
 user_sentences = {}
 
+# שלב 1: הפעלת הבוט עם משפט חדש
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sentence = "The quick brown fox jumps over the lazy dog"
     user_id = update.effective_user.id
+    sentence = random.choice(sentences)
     user_sentences[user_id] = sentence
-    
-    await update.message.reply_text(sentence)
 
-    # הקראת המשפט
+    # יצירת אודיו עם gTTS
     tts = gTTS(sentence)
-    tts.save("sentence.mp3")
-    audio = AudioSegment.from_file("sentence.mp3")
-    audio.export("sentence.ogg", format="ogg")
-    
-    with open("sentence.ogg", "rb") as voice:
-        await context.bot.send_voice(chat_id=update.effective_chat.id, voice=voice)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+        tts.save(f.name)
+        audio_path = f.name
 
+    # שליחת המשפט + קובץ קול
+    await update.message.reply_text(f"Please repeat this sentence:\n\n{sentence}")
+    await context.bot.send_voice(chat_id=update.effective_chat.id, voice=open(audio_path, 'rb'))
+
+# שלב 2: קבלת ההקלטה מהמשתמש
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sentence = user_sentences.get(user_id)
-    if not sentence:
+    if user_id not in user_sentences:
         await update.message.reply_text("Please start with /start")
         return
 
-    file = await context.bot.get_file(update.message.voice.file_id)
-    file_path = "user_voice.ogg"
-    await file.download_to_drive(file_path)
+    sentence = user_sentences[user_id]
 
-    audio = AudioSegment.from_file(file_path)
-    wav_path = "user_voice.wav"
+    voice: Voice = update.message.voice
+    file = await context.bot.get_file(voice.file_id)
+    ogg_path = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg").name
+    wav_path = ogg_path.replace(".ogg", ".wav")
+
+    await file.download_to_drive(ogg_path)
+
+    # המרה ל-WAV
+    audio = AudioSegment.from_ogg(ogg_path)
     audio.export(wav_path, format="wav")
 
+    # זיהוי טקסט
     result = model.transcribe(wav_path)
-    spoken = result["text"]
+    recognized = result['text'].strip()
 
-    # חישוב אחוז דיוק
-    ratio = difflib.SequenceMatcher(None, sentence.lower(), spoken.lower()).ratio()
+    # חישוב דיוק
+    ratio = difflib.SequenceMatcher(None, sentence.lower(), recognized.lower()).ratio()
     score = int(ratio * 100)
 
-    await update.message.reply_text(f"Your pronunciation score: {score}%")
-    await update.message.reply_text("Send the voice again or type /start for a new sentence")
+    await update.message.reply_text(
+        f"✅ You said: {recognized}\n🎯 Original: {sentence}\n📊 Pronunciation accuracy: {score}%\n\nSend a new voice message to try again or type /start for a new sentence."
+    )
 
+# הפעלת הבוט
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    application = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    
-    application.run_polling()
+    TOKEN = os.environ['BOT_TOKEN']
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
+    app.run_polling()
