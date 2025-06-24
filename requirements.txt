@@ -1,5 +1,4 @@
-python-telegram-bot==20.3
-gtts
-pydub
-torch
-git+https://github.com/openai/whisper.git
+pyrogram==2.0.106
+tgcrypto==1.2.5
+SpeechRecognition==3.10.1
+pydub==0.25.1
