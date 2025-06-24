@@ -1,73 +1,39 @@
 import os
-import tempfile
-import random
 import logging
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import speech_recognition as sr
-from gtts import gTTS
+from pydub import AudioSegment
 
-from telegram import Update, InputFile
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+# הגדר לוגים
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Hi! Send me a voice message in English and I will correct your mistakes.")
 
-sentences = [
-    "She sells seashells by the seashore.",
-    "I thought I saw a pussycat.",
-    "How much wood would a woodchuck chuck?",
-    "The quick brown fox jumps over the lazy dog.",
-    "Peter Piper picked a peck of pickled peppers."
-]
+def handle_voice(update: Update, context: CallbackContext):
+    file = update.message.voice.get_file()
+    file_path = "voice.ogg"
+    wav_path = "voice.wav"
+    file.download(file_path)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sentence = random.choice(sentences)
-    context.user_data["current_sentence"] = sentence
+    # המרה ל־WAV
+    sound = AudioSegment.from_file(file_path)
+    sound.export(wav_path, format="wav")
 
-    # שליחת הטקסט
-    await update.message.reply_text(f"Repeat this sentence:\n\n{sentence}")
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(wav_path) as source:
+        audio_data = recognizer.record(source)
+        try:
+            text = recognizer.recognize_google(audio_data)
+            update.message.reply_text(f"You said: {text}")
+            # כאן אפשר להוסיף בדיקת שגיאות ודקדוק
+        except sr.UnknownValueError:
+            update.message.reply_text("Sorry, I couldn't understand what you said.")
+        except sr.RequestError as e:
+            update.message.reply_text(f"Speech recognition error: {e}")
 
-    # יצירת קול
-    tts = gTTS(sentence)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-        tts.save(f.name)
-        with open(f.name, "rb") as audio_file:
-            await update.message.reply_voice(voice=InputFile(audio_file))
-
-    # בקשה מהמשתמש להקליט
-    await update.message.reply_text("Now send me your voice saying the same sentence!")
-
-async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        file = await context.bot.get_file(update.message.voice.file_id)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as tf:
-            await file.download_to_drive(tf.name)
-
-            recognizer = sr.Recognizer()
-            with sr.AudioFile(tf.name) as source:
-                audio = recognizer.record(source)
-
-            user_text = recognizer.recognize_google(audio)
-            await update.message.reply_text(f"You said: {user_text}")
-
-            expected = context.user_data.get("current_sentence", "")
-            expected_words = expected.lower().split()
-            user_words = user_text.lower().split()
-            matches = sum(1 for w1, w2 in zip(expected_words, user_words) if w1 == w2)
-            accuracy = round((matches / len(expected_words)) * 100) if expected_words else 0
-
-            await update.message.reply_text(f"Pronunciation Accuracy: {accuracy}%")
-            await update.message.reply_text("Want to try again? Type /start")
-
-    except Exception as e:
-        logging.error(e)
-        await update.message.reply_text("Sorry, I couldn't understand. Please try again.")
-
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.VOICE, voice_handler))
-    app.run_polling()
+def main():
+    updater = Up
