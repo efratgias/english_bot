@@ -3,15 +3,12 @@ from pyrogram import Client, filters
 import speech_recognition as sr
 from pydub import AudioSegment
 
-# מקבל את המשתנים מהסביבה (שאת הכנסת ב-Railway)
 api_id = int(os.environ['api_id'])
 api_hash = os.environ['api_hash']
 bot_token = os.environ['BOT_TOKEN']
 
-# מגדיר את הבוט
 app = Client("bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
 
-# פונקציה לזיהוי קול
 def recognize_speech(file_path):
     recognizer = sr.Recognizer()
     audio = AudioSegment.from_ogg(file_path)
@@ -27,7 +24,6 @@ def recognize_speech(file_path):
         except sr.RequestError:
             return "Sorry, there's a problem with the recognition service."
 
-# כשהבוט מקבל הודעה קולית
 @app.on_message(filters.voice)
 def voice_handler(client, message):
     file = app.download_media(message.voice.file_id)
