@@ -7,7 +7,7 @@ from gtts import gTTS
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# משפטים לשיפור האנגלית
+# משפטים לשיפור ההגייה
 SENTENCES = [
     "I have never been to New York.",
     "She enjoys learning English every day.",
@@ -25,51 +25,60 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"🗣 Repeat this sentence:\n\n\"{sentence}\"")
 
+    # צור קובץ קול מהמשפט ושלח למשתמש
     tts = gTTS(sentence)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
         tts.save(f.name)
         await update.message.reply_voice(voice=open(f.name, "rb"))
-        os.remove(f.name)
+    os.remove(f.name)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sentences:
-        await update.message.reply_text("Please start with /start to get a sentence.")
+        await update.message.reply_text("Please start first by sending /start")
         return
 
-    sentence = user_sentences[user_id]
+    # הורד את הודעת הקול הזמנית
+    voice = await update.message.voice.get_file()
+    ogg_path = f"{user_id}.ogg"
+    wav_path = f"{user_id}.wav"
+    await voice.download_to_drive(ogg_path)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as voice_file:
-        file = await context.bot.get_file(update.message.voice.file_id)
-        await file.download_to_drive(voice_file.name)
+    # המר ל-wav (רנדר תומך בזה ב-Ffmpeg מותקן)
+    os.system(f"ffmpeg -i {ogg_path} -ar 16000 -ac 1 {wav_path}")
 
-    audio_path = voice_file.name
-    wav_path = audio_path.replace(".ogg", ".wav")
-
-    os.system(f"ffmpeg -i {audio_path} {wav_path} -y")
+    # זיהוי דיבור
     recognizer = sr.Recognizer()
     with sr.AudioFile(wav_path) as source:
         audio = recognizer.record(source)
 
     try:
-        result = recognizer.recognize_google(audio)
-        ratio = difflib.SequenceMatcher(None, sentence.lower(), result.lower()).ratio()
-        accuracy = round(ratio * 100)
-        await update.message.reply_text(f"✅ Accuracy: {accuracy}%\nYou said: \"{result}\"")
+        recognized_text = recognizer.recognize_google(audio)
     except sr.UnknownValueError:
-        await update.message.reply_text("Sorry, I couldn't understand your pronunciation.")
-    except sr.RequestError:
-        await update.message.reply_text("There was an error with the speech recognition service.")
+        recognized_text = ""
 
-    os.remove(audio_path)
-    if os.path.exists(wav_path):
-        os.remove(wav_path)
+    # ניקוי קבצים זמניים
+    os.remove(ogg_path)
+    os.remove(wav_path)
+
+    # השוואה בין המשפט שנשלח למה שהמשתמש אמר
+    expected = user_sentences[user_id]
+    seq = difflib.SequenceMatcher(None, expected.lower(), recognized_text.lower())
+    score = round(seq.ratio() * 100)
+
+    await update.message.reply_text(
+        f"✅ You said: \"{recognized_text}\"\n🎯 Target: \"{expected}\"\n📊 Accuracy: {score}%"
+    )
 
 if __name__ == "__main__":
+    import asyncio
+
     TOKEN = os.getenv("BOT_TOKEN")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    app.run_polling()
+    print("Bot is running...")
+    asyncio.run(app.run_polling())
